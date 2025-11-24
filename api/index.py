@@ -1,13 +1,11 @@
-from flask import Flask, request, jsonify
+﻿from flask import Flask, request, jsonify
 from flask_cors import CORS
 import json
 import numpy as np
-from difflib import get_close_matches
 from collections import Counter
 import os
 
 app = Flask(__name__)
-# CORS: allow all origins and credentials for Vercel compatibility
 CORS(app, resources={
     r"/api/*": {
         "origins": [
@@ -19,236 +17,149 @@ CORS(app, resources={
     }
 })
 
-@app.route('/api/search', methods=['OPTIONS'])
-def api_search_options():
-    return '', 204
+# Global cache for data
+_data_cache = {}
 
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-CLEAN_DOCS = []
-TFIDF = {}
-tfidf_matrix = np.array([])
-vocab = []
-vocab_index = {}
-idf = np.array([])
-filenames = []
-vocab_set = set()
+def load_data():
+    """Lazy load data only when needed"""
+    if not _data_cache:
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        parent_dir = os.path.dirname(script_dir)
+        
+        with open(os.path.join(parent_dir, "clean_documents.json"), "r", encoding="utf-8") as f:
+            _data_cache["documents"] = json.load(f)
+        
+        with open(os.path.join(parent_dir, "tfidf_index.json"), "r", encoding="utf-8") as f:
+            tfidf = json.load(f)
+            _data_cache["tfidf_matrix"] = np.array(tfidf["matrix"])
+            _data_cache["vocabulary"] = tfidf["vocab"]
+            _data_cache["idf_values"] = np.array(tfidf["idf"])
+            _data_cache["filenames"] = tfidf["filenames"]
+    
+    return _data_cache
 
-
-# Load data if files exist (compatible with Vercel serverless)
-try:
-    clean_docs_path = os.path.join(os.path.dirname(__file__), "..", "clean_documents.json")
-    tfidf_index_path = os.path.join(os.path.dirname(__file__), "..", "tfidf_index.json")
-    with open(clean_docs_path, "r", encoding='utf-8') as f:
-        CLEAN_DOCS = json.load(f)
-    with open(tfidf_index_path, "r", encoding='utf-8') as f:
-        TFIDF = json.load(f)
-    tfidf_matrix = np.array(TFIDF["matrix"])
-    vocab = TFIDF["vocab"]
-    vocab_index = {w: i for i, w in enumerate(vocab)}
-    idf = np.array(TFIDF["idf"])
-    filenames = TFIDF["filenames"]
-    vocab_set = set(vocab)
-    for doc in CLEAN_DOCS:
-        if "tokens" in doc:
-            vocab_set.update(doc["tokens"])
-        if "title" in doc:
-            title_words = doc["title"].lower().replace("-", " ").replace(":", " ").split()
-            vocab_set.update(title_words)
-except Exception as e:
-    CLEAN_DOCS = []
-    TFIDF = {}
-    tfidf_matrix = np.array([])
-    vocab = []
-    vocab_index = {}
-    idf = np.array([])
-    filenames = []
-    vocab_set = set()
-    print(f"Error loading data: {e}")
-
-def preprocess_query(q):
-    q = q.lower().replace("-", " ")
-    return q.split()
+def preprocess_query(query):
+    return query.lower().split()
 
 def compute_tf(tokens):
-    vec = np.zeros(len(vocab_index))
-    count = Counter(tokens)
-    for word, freq in count.items():
-        if word in vocab_index:
-            vec[vocab_index[word]] = freq
-    return vec
+    tf = Counter(tokens)
+    total = len(tokens)
+    return {word: count / total for word, count in tf.items()}
 
-def cosine_similarity(a, b):
-    if np.linalg.norm(a) == 0 or np.linalg.norm(b) == 0:
-        return 0.0
-    return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b)))
+def cosine_similarity(vec1, vec2):
+    dot = np.dot(vec1, vec2)
+    norm1 = np.linalg.norm(vec1)
+    norm2 = np.linalg.norm(vec2)
+    return dot / (norm1 * norm2) if norm1 and norm2 else 0.0
 
-def autocorrect_query(query):
-    words = query.lower().split()
-    corrected_words = []
-    corrections_made = []
-    for word in words:
-        if len(word) <= 2:
-            corrected_words.append(word)
-            continue
-        if word in vocab_set:
-            corrected_words.append(word)
+def jaccard_similarity(set1, set2):
+    intersection = len(set1.intersection(set2))
+    union = len(set1.union(set2))
+    return intersection / union if union > 0 else 0.0
+
+def search_tfidf(query, top_k=10):
+    data = load_data()
+    query_tokens = preprocess_query(query)
+    query_tf = compute_tf(query_tokens)
+    
+    query_vector = np.zeros(len(data["vocabulary"]))
+    for word, tf_val in query_tf.items():
+        if word in data["vocabulary"]:
+            idx = data["vocabulary"].index(word)
+            query_vector[idx] = tf_val * data["idf_values"][idx]
+    
+    scores = []
+    for i, doc_vec in enumerate(data["tfidf_matrix"]):
+        score = cosine_similarity(query_vector, np.array(doc_vec))
+        if score > 0:
+            filename = data["filenames"][i]
+            doc = next((d for d in data["documents"] if d["title"] == filename), None)
+            if doc:
+                scores.append({"doc": doc, "score": float(score)})
+    
+    return sorted(scores, key=lambda x: x["score"], reverse=True)[:top_k]
+
+def search_jaccard(query, top_k=10):
+    data = load_data()
+    query_tokens = set(preprocess_query(query))
+    
+    scores = []
+    for doc in data["documents"]:
+        doc_tokens = set(doc.get("tokens", []))
+        score = jaccard_similarity(query_tokens, doc_tokens)
+        if score > 0:
+            scores.append({"doc": doc, "score": float(score)})
+    
+    return sorted(scores, key=lambda x: x["score"], reverse=True)[:top_k]
+
+def search_hybrid(query, top_k=10):
+    tfidf_results = search_tfidf(query, top_k * 2)
+    jaccard_results = search_jaccard(query, top_k * 2)
+    
+    combined = {}
+    for item in tfidf_results:
+        title = item["doc"]["title"]
+        combined[title] = {
+            "doc": item["doc"],
+            "tfidf_score": item["score"],
+            "jaccard_score": 0.0
+        }
+    
+    for item in jaccard_results:
+        title = item["doc"]["title"]
+        if title in combined:
+            combined[title]["jaccard_score"] = item["score"]
         else:
-            matches = get_close_matches(word, vocab_set, n=1, cutoff=0.5)
-            if matches:
-                corrected_words.append(matches[0])
-                corrections_made.append({"original": word, "corrected": matches[0]})
-            else:
-                corrected_words.append(word)
-    corrected_query = " ".join(corrected_words)
-    return corrected_query, corrections_made
-
-title_map = { d["title"]: d for d in CLEAN_DOCS }
-
-def jaccard_similarity(q_tokens, doc_tokens, title_tokens):
-    if len(q_tokens) == 0:
-        return 0.0
-    q_set = set(q_tokens)
-    d_set = set(doc_tokens)
-    inter = len(q_set & d_set)
-    union = len(q_set | d_set)
-    base = inter / union if union > 0 else 0.0
-    if len(q_set & set(title_tokens)) > 0:
-        base += 0.3
-    return base
-
-def search(query, method="hybrid", top_k=10):
-    corrected_query, corrections = autocorrect_query(query)
-    q_tokens = preprocess_query(corrected_query)
-    q_tf = compute_tf(q_tokens)
-    q_vec = q_tf * idf
-    tfidf_scores = []
-    for i, doc_vec in enumerate(tfidf_matrix):
-        sim = cosine_similarity(q_vec, doc_vec)
-        title = filenames[i].lower().replace("-", " ")
-        title_tokens = title.split()
-        if len(set(q_tokens) & set(title_tokens)) > 0:
-            sim += 0.3
-        tfidf_scores.append((i, sim))
-    tfidf_ranked = sorted(tfidf_scores, key=lambda x: x[1], reverse=True)
-    tfidf_ranked = [(i, s) for (i, s) in tfidf_ranked if s > 0]
-    jaccard_scores = []
-    for doc in CLEAN_DOCS:
-        sim = jaccard_similarity(
-            q_tokens,
-            doc["tokens"],
-            doc["title"].lower().replace("-", " ").split()
-        )
-        jaccard_scores.append((doc["title"], sim))
-    jaccard_ranked = sorted(jaccard_scores, key=lambda x: x[1], reverse=True)
-    jaccard_ranked = [(t, s) for (t, s) in jaccard_ranked if s > 0]
-    result_tfidf = []
-    for idx, score in tfidf_ranked[:top_k]:
-        title = filenames[idx]
-        if title in title_map:
-            d = title_map[title]
-            result_tfidf.append({
-                "title": d["title"],
-                "poster": d["poster"],
-                "description": d["description"],
-                "tfidf_score": float(score)
-            })
-    result_jaccard = []
-    for title, score in jaccard_ranked[:top_k]:
-        if title in title_map:
-            d = title_map[title]
-            result_jaccard.append({
-                "title": d["title"],
-                "poster": d["poster"],
-                "description": d["description"],
-                "jaccard_score": float(score)
-            })
-    if method == "hybrid":
-        combined = {}
-        for item in result_tfidf:
-            title = item["title"]
             combined[title] = {
-                "data": item,
-                "tfidf_score": item["tfidf_score"],
-                "jaccard_score": 0
+                "doc": item["doc"],
+                "tfidf_score": 0.0,
+                "jaccard_score": item["score"]
             }
-        for item in result_jaccard:
-            title = item["title"]
-            if title in combined:
-                combined[title]["jaccard_score"] = item["jaccard_score"]
-            else:
-                combined[title] = {
-                    "data": item,
-                    "tfidf_score": 0,
-                    "jaccard_score": item["jaccard_score"]
-                }
-        hybrid_results = []
-        for title, scores in combined.items():
-            hybrid_score = (scores["tfidf_score"] * 0.7 + scores["jaccard_score"] * 0.3)
-            result = scores["data"].copy()
-            result["score"] = float(hybrid_score)
-            result["tfidf_score"] = float(scores["tfidf_score"])
-            result["jaccard_score"] = float(scores["jaccard_score"])
-            hybrid_results.append(result)
-        hybrid_results.sort(key=lambda x: x["score"], reverse=True)
-        return {
-            "results": hybrid_results[:top_k],
-            "corrected_query": corrected_query,
-            "corrections": corrections,
-            "total": len(hybrid_results)
-        }
-    elif method == "tfidf":
-        return {
-            "results": result_tfidf,
-            "corrected_query": corrected_query,
-            "corrections": corrections,
-            "total": len(result_tfidf)
-        }
-    elif method == "jaccard":
-        return {
-            "results": result_jaccard,
-            "corrected_query": corrected_query,
-            "corrections": corrections,
-            "total": len(result_jaccard)
-        }
-
-@app.route('/api/search', methods=['GET', 'POST'])
-def api_search():
-    # Error response if data not loaded
-    if not CLEAN_DOCS or not TFIDF:
-        return jsonify({'error': 'Data files not loaded or missing'}), 500
-    if request.method == 'POST':
-        data = request.get_json()
-        query = data.get('query', '')
-        method = data.get('method', 'hybrid')
-        top_k = data.get('top_k', 10)
-    else:
-        query = request.args.get('query', '')
-        method = request.args.get('method', 'hybrid')
-        top_k = int(request.args.get('top_k', 10))
-    if not query:
-        return jsonify({'error': 'Query is required'}), 400
-    try:
-        result = search(query, method, top_k)
-        return jsonify({
-            'query': query,
-            'corrected_query': result['corrected_query'] if result['corrected_query'] != query else None,
-            'corrections': result['corrections'] if result['corrections'] else None,
-            'method': method,
-            'results': result['results']
+    
+    results = []
+    for title, data in combined.items():
+        hybrid_score = 0.7 * data["tfidf_score"] + 0.3 * data["jaccard_score"]
+        results.append({
+            "title": data["doc"]["title"],
+            "poster": data["doc"].get("poster", ""),
+            "description": data["doc"].get("description", ""),
+            "score": float(hybrid_score),
+            "tfidf_score": float(data["tfidf_score"]),
+            "jaccard_score": float(data["jaccard_score"])
         })
-    except Exception as e:
-        print(f"Error: {str(e)}")
-        return jsonify({'error': str(e)}), 500
+    
+    return sorted(results, key=lambda x: x["score"], reverse=True)[:top_k]
 
-@app.route('/api/health', methods=['GET'])
+@app.route("/api/search", methods=["POST", "GET"])
+def search():
+    if request.method == "GET":
+        query = request.args.get("query", "")
+        method = request.args.get("method", "hybrid")
+        top_k = int(request.args.get("top_k", 10))
+    else:
+        data = request.get_json()
+        query = data.get("query", "")
+        method = data.get("method", "hybrid")
+        top_k = data.get("top_k", 10)
+    
+    if not query:
+        return jsonify({"error": "Query is required"}), 400
+    
+    if method == "tfidf":
+        results = search_tfidf(query, top_k)
+        formatted = [{"title": r["doc"]["title"], "poster": r["doc"].get("poster", ""),
+                     "description": r["doc"].get("description", ""), "tfidf_score": r["score"]}
+                    for r in results]
+    elif method == "jaccard":
+        results = search_jaccard(query, top_k)
+        formatted = [{"title": r["doc"]["title"], "poster": r["doc"].get("poster", ""),
+                     "description": r["doc"].get("description", ""), "jaccard_score": r["score"]}
+                    for r in results]
+    else:
+        formatted = search_hybrid(query, top_k)
+    
+    return jsonify({"results": formatted, "query": query, "method": method})
+
+@app.route("/api/health", methods=["GET"])
 def health():
-    if not CLEAN_DOCS:
-        return jsonify({'status': 'error', 'message': 'Data file clean_documents.json not loaded'}), 500
-    return jsonify({
-        'status': 'ok',
-        'total_documents': len(CLEAN_DOCS),
-        'vocabulary_size': len(vocab_set)
-    })
-
-# Vercel will use 'app' as entry point
-handler = app
+    return jsonify({"status": "ok"})
