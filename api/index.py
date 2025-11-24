@@ -27,10 +27,11 @@ idf = np.array([])
 filenames = []
 vocab_set = set()
 
-# Load data if files exist
+
+# Load data if files exist (compatible with Vercel serverless)
 try:
-    clean_docs_path = os.path.join(SCRIPT_DIR, "../clean_documents.json")
-    tfidf_index_path = os.path.join(SCRIPT_DIR, "../tfidf_index.json")
+    clean_docs_path = os.path.join(os.path.dirname(__file__), "..", "clean_documents.json")
+    tfidf_index_path = os.path.join(os.path.dirname(__file__), "..", "tfidf_index.json")
     with open(clean_docs_path, "r", encoding='utf-8') as f:
         CLEAN_DOCS = json.load(f)
     with open(tfidf_index_path, "r", encoding='utf-8') as f:
@@ -48,6 +49,14 @@ try:
             title_words = doc["title"].lower().replace("-", " ").replace(":", " ").split()
             vocab_set.update(title_words)
 except Exception as e:
+    CLEAN_DOCS = []
+    TFIDF = {}
+    tfidf_matrix = np.array([])
+    vocab = []
+    vocab_index = {}
+    idf = np.array([])
+    filenames = []
+    vocab_set = set()
     print(f"Error loading data: {e}")
 
 def preprocess_query(q):
