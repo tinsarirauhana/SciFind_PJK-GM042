@@ -8,7 +8,17 @@ import os
 
 app = Flask(__name__)
 # CORS: allow all origins and credentials for Vercel compatibility
-CORS(app, resources={r"/api/*": {"origins": "*"}}, supports_credentials=True, allow_headers="*")
+CORS(app, resources={
+    r"/api/*": {
+        "origins": [
+            "http://localhost:5173", 
+            "http://localhost:5000", 
+            "https://*.vercel.app",
+            "https://uas-pi-sci-find.vercel.app"
+        ]
+    }
+})
+
 @app.route('/api/search', methods=['OPTIONS'])
 def api_search_options():
     return '', 204
