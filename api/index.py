@@ -203,6 +203,9 @@ def search(query, method="hybrid", top_k=10):
 
 @app.route('/api/search', methods=['GET', 'POST'])
 def api_search():
+    # Error response if data not loaded
+    if not CLEAN_DOCS or not TFIDF:
+        return jsonify({'error': 'Data files not loaded or missing'}), 500
     if request.method == 'POST':
         data = request.get_json()
         query = data.get('query', '')
@@ -229,6 +232,8 @@ def api_search():
 
 @app.route('/api/health', methods=['GET'])
 def health():
+    if not CLEAN_DOCS:
+        return jsonify({'status': 'error', 'message': 'Data file clean_documents.json not loaded'}), 500
     return jsonify({
         'status': 'ok',
         'total_documents': len(CLEAN_DOCS),
