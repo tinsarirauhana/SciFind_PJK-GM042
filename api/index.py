@@ -7,15 +7,11 @@ from collections import Counter
 import os
 
 app = Flask(__name__)
-CORS(app, resources={
-    r"/api/*": {
-        "origins": [
-            "http://localhost:5173",
-            "http://localhost:5000",
-            "https://uas-pi-sci-find.vercel.app"
-        ]
-    }
-})
+# CORS: allow all origins and credentials for Vercel compatibility
+CORS(app, resources={r"/api/*": {"origins": "*"}}, supports_credentials=True, allow_headers="*")
+@app.route('/api/search', methods=['OPTIONS'])
+def api_search_options():
+    return '', 204
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 CLEAN_DOCS = []
