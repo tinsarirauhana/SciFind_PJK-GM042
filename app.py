@@ -7,13 +7,13 @@ from collections import Counter
 import os
 
 app = Flask(__name__)
-# Allow CORS for frontend domains
+# Allow CORS for frontend domains (explicit vercel frontend domain)
 CORS(app, resources={
     r"/api/*": {
         "origins": [
             "http://localhost:5173",
             "http://localhost:5000",
-            "https://*.vercel.app"
+            "https://uas-pi-sci-find.vercel.app"
         ]
     }
 })
