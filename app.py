@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify
+﻿from flask import Flask, request, jsonify
 from flask_cors import CORS
 import json
 import numpy as np
@@ -12,11 +12,11 @@ CORS(app, resources={
     r"/api/*": {
         "origins": [
             "http://localhost:5173",
-            "http://localhost:5000", 
+            "http://localhost:5000",
             "https://*.vercel.app"
         ]
     }
-})  # Enable CORS for React frontend
+})
 
 # Get the directory where this script is located
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -41,15 +41,24 @@ vocab_index = {w: i for i, w in enumerate(vocab)}
 idf = np.array(TFIDF["idf"])
 filenames = TFIDF["filenames"]
 
-print(f"✓ Loaded {len(CLEAN_DOCS)} documents")
-print(f"✓ Vocabulary size: {len(vocab)}")
+# Build vocabulary set for auto-correct
+vocab_set = set(vocab)
+for doc in CLEAN_DOCS:
+    if "tokens" in doc:
+        vocab_set.update(doc["tokens"])
+    if "title" in doc:
+        title_words = doc["title"].lower().replace("-", " ").replace(":", " ").split()
+        vocab_set.update(title_words)
+
+print(f" Loaded {len(CLEAN_DOCS)} documents")
+print(f" Vocabulary size: {len(vocab_set)}")
 
 # ============================================================
 #  PREPROCESSING UTILS
 # ============================================================
 
 def preprocess_query(q):
-    q = q.lower().replace("-", " ")    
+    q = q.lower().replace("-", " ")
     return q.split()
 
 def compute_tf(tokens):
@@ -66,25 +75,37 @@ def cosine_similarity(a, b):
     return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b)))
 
 # ============================================================
-#  SAFE AUTOCORRECT
+#  IMPROVED AUTOCORRECT
 # ============================================================
 
-def autocorrect_safe(tokens):
-    corrected = []
-    suggestions = []
-
-    for t in tokens:
-        matches = get_close_matches(t, vocab, n=1, cutoff=0.75)
-        if matches and matches[0] != t:
-            suggestions.append({"original": t, "suggestion": matches[0]})
-            corrected.append(t)   
+def autocorrect_query(query):
+    """Auto-correct typos in query using vocabulary"""
+    words = query.lower().split()
+    corrected_words = []
+    corrections_made = []
+    
+    for word in words:
+        # Skip very short words
+        if len(word) <= 2:
+            corrected_words.append(word)
+            continue
+            
+        if word in vocab_set:
+            corrected_words.append(word)
         else:
-            corrected.append(t)
-
-    return corrected, suggestions
+            # Find close matches with lower threshold
+            matches = get_close_matches(word, vocab_set, n=1, cutoff=0.5)
+            if matches:
+                corrected_words.append(matches[0])
+                corrections_made.append({"original": word, "corrected": matches[0]})
+            else:
+                corrected_words.append(word)
+    
+    corrected_query = " ".join(corrected_words)
+    return corrected_query, corrections_made
 
 # ============================================================
-#  TITLE → DOCUMENT MAP
+#  TITLE  DOCUMENT MAP
 # ============================================================
 
 title_map = { d["title"]: d for d in CLEAN_DOCS }
@@ -115,12 +136,11 @@ def jaccard_similarity(q_tokens, doc_tokens, title_tokens):
 # ============================================================
 
 def search(query, method="hybrid", top_k=10):
+    # === AUTOCORRECT ===
+    corrected_query, corrections = autocorrect_query(query)
     
     # === PREPROCESS ===
-    q_tokens = preprocess_query(query)
-    
-    # === SAFE AUTOCORRECT ===
-    q_tokens, suggestions = autocorrect_safe(q_tokens)
+    q_tokens = preprocess_query(corrected_query)
 
     # ======================================================
     # TF-IDF SEARCH (WITH TITLE BOOST)
@@ -163,7 +183,7 @@ def search(query, method="hybrid", top_k=10):
     jaccard_ranked = [(t, s) for (t, s) in jaccard_ranked if s > 0]
 
     # ======================================================
-    # BUILD RESULTS
+    # BUILD RESULTS (with new field names)
     # ======================================================
 
     result_tfidf = []
@@ -172,12 +192,10 @@ def search(query, method="hybrid", top_k=10):
         if title in title_map:
             d = title_map[title]
             result_tfidf.append({
-                "judul": d["title"],
+                "title": d["title"],
                 "poster": d["poster"],
-                "isi": d["description"][:500] + "...",
-                "content": d["description"],
-                "score": float(score),
-                "method": "TF-IDF"
+                "description": d["description"],
+                "tfidf_score": float(score)
             })
 
     result_jaccard = []
@@ -185,74 +203,69 @@ def search(query, method="hybrid", top_k=10):
         if title in title_map:
             d = title_map[title]
             result_jaccard.append({
-                "judul": d["title"],
+                "title": d["title"],
                 "poster": d["poster"],
-                "isi": d["description"][:500] + "...",
-                "content": d["description"],
-                "score": float(score),
-                "method": "Jaccard"
+                "description": d["description"],
+                "jaccard_score": float(score)
             })
 
     # ======================================================
     # HYBRID: COMBINE BOTH
     # ======================================================
-    
+
     if method == "hybrid":
-        # Combine scores from both methods
         combined = {}
-        
-        # Add TF-IDF scores
+
         for item in result_tfidf:
-            title = item["judul"]
+            title = item["title"]
             combined[title] = {
                 "data": item,
-                "tfidf_score": item["score"],
+                "tfidf_score": item["tfidf_score"],
                 "jaccard_score": 0
             }
-        
-        # Add Jaccard scores
+
         for item in result_jaccard:
-            title = item["judul"]
+            title = item["title"]
             if title in combined:
-                combined[title]["jaccard_score"] = item["score"]
+                combined[title]["jaccard_score"] = item["jaccard_score"]
             else:
                 combined[title] = {
                     "data": item,
                     "tfidf_score": 0,
-                    "jaccard_score": item["score"]
+                    "jaccard_score": item["jaccard_score"]
                 }
-        
-        # Calculate hybrid score (70% TF-IDF + 30% Jaccard)
+
         hybrid_results = []
         for title, scores in combined.items():
             hybrid_score = (scores["tfidf_score"] * 0.7 + scores["jaccard_score"] * 0.3)
             result = scores["data"].copy()
             result["score"] = float(hybrid_score)
-            result["method"] = "Hybrid"
             result["tfidf_score"] = float(scores["tfidf_score"])
             result["jaccard_score"] = float(scores["jaccard_score"])
             hybrid_results.append(result)
-        
-        # Sort by hybrid score
+
         hybrid_results.sort(key=lambda x: x["score"], reverse=True)
-        
+
         return {
             "results": hybrid_results[:top_k],
-            "suggestions": suggestions,
+            "corrected_query": corrected_query,
+            "corrections": corrections,
             "total": len(hybrid_results)
         }
-    
+
     elif method == "tfidf":
         return {
             "results": result_tfidf,
-            "suggestions": suggestions,
+            "corrected_query": corrected_query,
+            "corrections": corrections,
             "total": len(result_tfidf)
         }
-    
+
     elif method == "jaccard":
         return {
             "results": result_jaccard,
-            "suggestions": suggestions,
+            "corrected_query": corrected_query,
+            "corrections": corrections,
             "total": len(result_jaccard)
         }
 
@@ -272,21 +285,21 @@ def api_search():
         query = request.args.get('query', '')
         method = request.args.get('method', 'hybrid')
         top_k = int(request.args.get('top_k', 10))
-    
+
     if not query:
         return jsonify({'error': 'Query is required'}), 400
-    
+
     try:
         result = search(query, method, top_k)
-        
+
         return jsonify({
             'query': query,
+            'corrected_query': result['corrected_query'] if result['corrected_query'] != query else None,
+            'corrections': result['corrections'] if result['corrections'] else None,
             'method': method,
-            'total_results': result['total'],
-            'results': result['results'],
-            'suggestions': result['suggestions']
+            'results': result['results']
         })
-    
+
     except Exception as e:
         print(f"Error: {str(e)}")
         return jsonify({'error': str(e)}), 500
@@ -295,38 +308,9 @@ def api_search():
 def health():
     """Health check endpoint"""
     return jsonify({
-        'status': 'healthy',
+        'status': 'ok',
         'total_documents': len(CLEAN_DOCS),
-        'vocabulary_size': len(vocab)
-    })
-
-@app.route('/api/document/<title>', methods=['GET'])
-def get_document(title):
-    """Get specific document by title"""
-    if title in title_map:
-        return jsonify(title_map[title])
-    
-    return jsonify({'error': 'Document not found'}), 404
-
-@app.route('/api/random', methods=['GET'])
-def get_random():
-    """Get random documents"""
-    import random
-    count = int(request.args.get('count', 5))
-    random_docs = random.sample(CLEAN_DOCS, min(count, len(CLEAN_DOCS)))
-    
-    results = []
-    for doc in random_docs:
-        results.append({
-            "judul": doc["title"],
-            "poster": doc["poster"],
-            "isi": doc["description"][:500] + "...",
-            "content": doc["description"]
-        })
-    
-    return jsonify({
-        'results': results,
-        'total': len(results)
+        'vocabulary_size': len(vocab_set)
     })
 
 if __name__ == '__main__':
