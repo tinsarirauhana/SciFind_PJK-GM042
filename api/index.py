@@ -1,4 +1,21 @@
-﻿from flask import Flask, request, jsonify
+from difflib import get_close_matches
+def autocorrect_query(query, vocabulary):
+    words = query.lower().split()
+    corrected_words = []
+    corrections = []
+    for word in words:
+        if word in vocabulary:
+            corrected_words.append(word)
+        else:
+            matches = get_close_matches(word, vocabulary, n=1, cutoff=0.7)
+            if matches:
+                corrected_words.append(matches[0])
+                corrections.append({"original": word, "corrected": matches[0]})
+            else:
+                corrected_words.append(word)
+    corrected_query = " ".join(corrected_words)
+    return corrected_query, corrections
+from flask import Flask, request, jsonify
 from flask_cors import CORS
 import json
 import numpy as np
@@ -141,24 +158,35 @@ def search():
         query = data.get("query", "")
         method = data.get("method", "hybrid")
         top_k = data.get("top_k", 10)
-    
+
     if not query:
         return jsonify({"error": "Query is required"}), 400
-    
+
+    # Autocorrect
+    data_loaded = load_data()
+    vocabulary = set(data_loaded["vocabulary"]) if "vocabulary" in data_loaded else set()
+    corrected_query, corrections = autocorrect_query(query, vocabulary)
+
     if method == "tfidf":
-        results = search_tfidf(query, top_k)
+        results = search_tfidf(corrected_query, top_k)
         formatted = [{"title": r["doc"]["title"], "poster": r["doc"].get("poster", ""),
                      "description": r["doc"].get("description", ""), "tfidf_score": r["score"]}
                     for r in results]
     elif method == "jaccard":
-        results = search_jaccard(query, top_k)
+        results = search_jaccard(corrected_query, top_k)
         formatted = [{"title": r["doc"]["title"], "poster": r["doc"].get("poster", ""),
                      "description": r["doc"].get("description", ""), "jaccard_score": r["score"]}
                     for r in results]
     else:
-        formatted = search_hybrid(query, top_k)
-    
-    return jsonify({"results": formatted, "query": query, "method": method})
+        formatted = search_hybrid(corrected_query, top_k)
+
+    return jsonify({
+        "results": formatted,
+        "query": query,
+        "corrected_query": corrected_query if corrected_query != query else None,
+        "corrections": corrections if corrections else None,
+        "method": method
+    })
 
 @app.route("/api/health", methods=["GET"])
 def health():
