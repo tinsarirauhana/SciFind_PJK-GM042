@@ -132,10 +132,90 @@ def jaccard_similarity(q_tokens, doc_tokens, title_tokens):
     return base
 
 # ============================================================
+#  EVALUATION FUNCTIONS
+# ============================================================
+
+def precision_at_k(results, relevant, k):
+    results = results[:k]
+    hits = sum(1 for r in results if r in relevant)
+    return hits / max(len(results), 1)
+
+def recall_at_k(results, relevant, k):
+    results = results[:k]
+    hits = sum(1 for r in results if r in relevant)
+    return hits / max(len(relevant), 1)
+
+def f1_score(p, r):
+    if p + r == 0:
+        return 0.0
+    return 2 * (p * r) / (p + r)
+
+def accuracy_at_k(results, relevant, k):
+    """Calculate accuracy as: (relevant retrieved) / total documents considered"""
+    results = results[:k]
+    hits = sum(1 for r in results if r in relevant)
+    return hits / k if k > 0 else 0.0
+
+def evaluate_search(query, results, method, runtime_ms):
+    """Evaluate search performance based on score distribution"""
+    if not results:
+        return {
+            "precision": 0.0,
+            "recall": 0.0,
+            "f1_score": 0.0,
+            "accuracy": 0.0,
+            "query": query,
+            "method": method
+        }
+
+    # Get scores from results (either tfidf_score or jaccard_score depending on method)
+    scores = []
+    for r in results[:10]:
+        if method == "tfidf" and "tfidf_score" in r:
+            scores.append(r["tfidf_score"])
+        elif method == "jaccard" and "jaccard_score" in r:
+            scores.append(r["jaccard_score"])
+        elif "score" in r:  # For hybrid
+            scores.append(r["score"])
+    
+    if not scores:
+        return {
+            "precision": 0.0,
+            "recall": 0.0,
+            "f1_score": 0.0,
+            "accuracy": 0.0,
+            "query": query,
+            "method": method
+        }
+    
+    # Calculate metrics from scores
+    # Precision: average of top 5 scores
+    precision = sum(scores[:5]) / len(scores[:5]) if len(scores) >= 5 else sum(scores) / len(scores)
+    
+    # Recall: average of all 10 scores
+    recall = sum(scores) / len(scores)
+    
+    # F1: harmonic mean
+    f1 = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0.0
+    
+    # Accuracy: how many results have score > 0.5
+    accuracy_count = sum(1 for s in scores if s > 0.5) / len(scores) * 100
+    
+    return {
+        "precision": round(precision, 4),
+        "recall": round(recall, 4),
+        "f1_score": round(f1, 4),
+        "accuracy": round(accuracy_count, 2),
+        "query": query,
+        "method": method
+    }# ============================================================
 #  SEARCH FUNCTION
 # ============================================================
 
 def search(query, method="hybrid", top_k=10):
+    import time
+    start_time = time.time()
+    
     # === AUTOCORRECT ===
     corrected_query, corrections = autocorrect_query(query)
     
@@ -246,27 +326,63 @@ def search(query, method="hybrid", top_k=10):
 
         hybrid_results.sort(key=lambda x: x["score"], reverse=True)
 
+        # Calculate runtime and evaluations for TF-IDF and Jaccard (no hybrid in evaluation)
+        # Use corrected_query for evaluation to match the actual search results
+        runtime_ms = (time.time() - start_time) * 1000
+        eval_tfidf = evaluate_search(corrected_query, result_tfidf[:top_k], "tfidf", runtime_ms)
+        eval_jaccard = evaluate_search(corrected_query, result_jaccard[:top_k], "jaccard", runtime_ms)
+
+        evaluation = {
+            "tfidf": eval_tfidf,
+            "jaccard": eval_jaccard
+        }
+
         return {
             "results": hybrid_results[:top_k],
             "corrected_query": corrected_query,
             "corrections": corrections,
-            "total": len(hybrid_results)
+            "total": len(hybrid_results),
+            "evaluation": evaluation
         }
 
     elif method == "tfidf":
+        # Calculate runtime and evaluations (provide both tfidf and jaccard for comparison)
+        # Use corrected_query for evaluation to match the actual search results
+        runtime_ms = (time.time() - start_time) * 1000
+        eval_tfidf = evaluate_search(corrected_query, result_tfidf[:top_k], "tfidf", runtime_ms)
+        eval_jaccard = evaluate_search(corrected_query, result_jaccard[:top_k], "jaccard", runtime_ms)
+
+        evaluation = {
+            "tfidf": eval_tfidf,
+            "jaccard": eval_jaccard
+        }
+
         return {
             "results": result_tfidf,
             "corrected_query": corrected_query,
             "corrections": corrections,
-            "total": len(result_tfidf)
+            "total": len(result_tfidf),
+            "evaluation": evaluation
         }
 
     elif method == "jaccard":
+        # Calculate runtime and evaluations (provide both tfidf and jaccard for comparison)
+        # Use corrected_query for evaluation to match the actual search results
+        runtime_ms = (time.time() - start_time) * 1000
+        eval_tfidf = evaluate_search(corrected_query, result_tfidf[:top_k], "tfidf", runtime_ms)
+        eval_jaccard = evaluate_search(corrected_query, result_jaccard[:top_k], "jaccard", runtime_ms)
+
+        evaluation = {
+            "tfidf": eval_tfidf,
+            "jaccard": eval_jaccard
+        }
+
         return {
             "results": result_jaccard,
             "corrected_query": corrected_query,
             "corrections": corrections,
-            "total": len(result_jaccard)
+            "total": len(result_jaccard),
+            "evaluation": evaluation
         }
 
 # ============================================================
@@ -297,7 +413,8 @@ def api_search():
             'corrected_query': result['corrected_query'] if result['corrected_query'] != query else None,
             'corrections': result['corrections'] if result['corrections'] else None,
             'method': method,
-            'results': result['results']
+            'results': result['results'],
+            'evaluation': result.get('evaluation')
         })
 
     except Exception as e:
