@@ -1,4 +1,4 @@
-﻿from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify
 from flask_cors import CORS
 import json
 import numpy as np
@@ -19,7 +19,7 @@ CORS(app, resources={
 })
 
 # Get the directory where this script is located
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+SCRIPT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # ============================================================
 #  LOAD CLEAN DOCUMENTS & TF-IDF INDEX
