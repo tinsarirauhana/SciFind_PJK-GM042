@@ -198,14 +198,28 @@ def evaluate_search(query, results, method, runtime_ms):
     # F1: harmonic mean
     f1 = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0.0
     
-    # Accuracy: how many results have score > 0.5
-    accuracy_count = sum(1 for s in scores if s > 0.5) / len(scores) * 100
+    # Accuracy: score spread/differentiation (how well ranked results separate)
+    # Based on: (max_score - min_score) / max_score
+    # This measures how much the top result differs from worst result
+    # Higher spread = better differentiation = higher accuracy
+    if len(scores) > 0:
+        max_score = max(scores)
+        min_score = min(scores)
+        
+        if max_score > 0:
+            # Score spread: how much the best differs from worst (as percentage of max)
+            spread = (max_score - min_score) / max_score
+            accuracy_pct = max(0, min(100, spread * 100))
+        else:
+            accuracy_pct = 0.0
+    else:
+        accuracy_pct = 0.0
     
     return {
         "precision": round(precision, 4),
         "recall": round(recall, 4),
         "f1_score": round(f1, 4),
-        "accuracy": round(accuracy_count, 2),
+        "accuracy": round(accuracy_pct, 2),
         "query": query,
         "method": method
     }# ============================================================
