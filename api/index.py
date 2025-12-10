@@ -163,7 +163,7 @@ def evaluate_search(query, results, method, runtime_ms):
             "precision": 0.0,
             "recall": 0.0,
             "f1_score": 0.0,
-            "accuracy": 0.0,
+            "accuracy": round(runtime_ms, 2),
             "query": query,
             "method": method
         }
@@ -183,7 +183,7 @@ def evaluate_search(query, results, method, runtime_ms):
             "precision": 0.0,
             "recall": 0.0,
             "f1_score": 0.0,
-            "accuracy": 0.0,
+            "accuracy": round(runtime_ms, 2),
             "query": query,
             "method": method
         }
@@ -219,7 +219,7 @@ def evaluate_search(query, results, method, runtime_ms):
         "precision": round(precision, 4),
         "recall": round(recall, 4),
         "f1_score": round(f1, 4),
-        "accuracy": round(accuracy_pct, 2),
+        "accuracy": round(runtime_ms, 2),
         "query": query,
         "method": method
     }# ============================================================
