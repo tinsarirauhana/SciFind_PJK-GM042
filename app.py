@@ -4,6 +4,7 @@ import json
 import numpy as np
 from difflib import get_close_matches
 from collections import Counter
+from semantic_search import semantic_search, get_recommendations
 import os
 
 app = Flask(__name__)
@@ -444,6 +445,54 @@ def health():
         'vocabulary_size': len(vocab_set)
     })
 
+@app.route('/api/semantic-search', methods=['GET', 'POST'])
+def api_semantic_search():
+    if request.method == 'POST':
+        data = request.get_json()
+        query = data.get('query', '')
+        top_k = data.get('top_k', 10)
+    else:
+        query = request.args.get('query', '')
+        top_k = int(request.args.get('top_k', 10))
+
+    if not query:
+        return jsonify({'error': 'Query is required'}), 400
+
+    try:
+        result = semantic_search(query, top_k)
+        return jsonify({
+            'query': query,
+            'method': 'semantic',
+            'results': result['results'],
+            'latency_ms': result['latency_ms']
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/recommend', methods=['GET', 'POST'])
+def api_recommend():
+    if request.method == 'POST':
+        data = request.get_json()
+        title = data.get('title', '')
+        top_n = data.get('top_n', 6)
+    else:
+        title = request.args.get('title', '')
+        top_n = int(request.args.get('top_n', 6))
+
+    if not title:
+        return jsonify({'error': 'Title is required'}), 400
+
+    try:
+        result = get_recommendations(title, top_n)
+        return jsonify({
+            'title': title,
+            'recommendations': result['results'],
+            'latency_ms': result['latency_ms']
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+    
 if __name__ == '__main__':
     print("\n" + "="*60)
     print("  SciFind Search Engine API Server")
@@ -452,4 +501,4 @@ if __name__ == '__main__':
     print(f"  Server: http://localhost:5000")
     print(f"  Health: http://localhost:5000/api/health")
     print("="*60 + "\n")
-    app.run(debug=True, port=5000)
+    app.run(debug=True, port=8000)
