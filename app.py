@@ -469,9 +469,10 @@ def api_recommend():
         return jsonify({
             'title': title,
             'recommendations': result['results'],
-            'latency_ms': result['latency_ms']
+            'latency_ms': result.get('latency_ms', 0)
         })
     except Exception as e:
+        traceback.print_exc()
         return jsonify({'error': str(e)}), 500
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
