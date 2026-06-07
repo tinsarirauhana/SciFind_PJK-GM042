@@ -6,6 +6,7 @@ from difflib import get_close_matches
 from collections import Counter
 import os
 import time
+from dotenv import load_dotenv
 
 app = Flask(__name__)
 CORS(app, resources={
@@ -24,6 +25,9 @@ CORS(app, resources={
 
 # api/index.py is at <root>/api/index.py → parent is <root>
 SCRIPT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+# Load .env from project root if present
+load_dotenv(os.path.join(SCRIPT_DIR, ".env"))
 
 # ============================================================
 #  LOAD CORE DATA (TF-IDF + CLEAN DOCS)
@@ -65,6 +69,10 @@ _sem_doc_ids = None
 _raw_embeddings = None
 _title_to_doc = None
 
+_gemini_ready = False
+_gemini_error = None
+_gemini_module = None
+
 
 def _load_semantic():
     global _semantic_ready, _semantic_error
@@ -97,6 +105,66 @@ def _load_semantic():
     except Exception as exc:
         _semantic_error = str(exc)
         print(f"  Semantic load FAILED: {exc}")
+
+
+def _load_gemini():
+    global _gemini_ready, _gemini_error, _gemini_module
+    if _gemini_ready or _gemini_error:
+        return
+
+    try:
+        import google.generativeai as genai
+
+        api_key = os.getenv("GOOGLE_API_KEY") or os.getenv("GENAI_API_KEY")
+        if not api_key:
+            raise Exception("Environment variable GOOGLE_API_KEY or GENAI_API_KEY is required for Gemini 2.5 Flash")
+
+        genai.configure(api_key=api_key)
+        _gemini_module = genai
+        _gemini_ready = True
+        print("  Gemini module loaded OK")
+
+    except Exception as exc:
+        _gemini_error = str(exc)
+        print(f"  Gemini load FAILED: {exc}")
+
+
+def _find_doc_by_title(title):
+    if not title:
+        return None
+    normalized = title.strip().lower()
+    if title in title_map:
+        return title_map[title]
+    for doc in CLEAN_DOCS:
+        if doc.get("title", "").strip().lower() == normalized:
+            return doc
+    for doc in CLEAN_DOCS:
+        if normalized in doc.get("title", "").strip().lower():
+            return doc
+    return None
+
+
+def _build_gemini_prompt(question, title=None):
+    if title:
+        doc = _find_doc_by_title(title)
+        if doc:
+            return (
+                "Anda adalah asisten ahli dari SciFind. Gunakan data film berikut untuk menjawab pertanyaan pengguna.\n"
+                "Berikan jawaban yang informatif, lengkap, dan membantu berdasarkan deskripsi yang tersedia.\n\n"
+                f"Judul: {doc.get('title', '')}\n"
+                f"Deskripsi: {doc.get('description', '')}\n\n"
+                f"Pertanyaan: {question}\n"
+                "Jawablah dalam bahasa Indonesia yang baik, jelas, dan pastikan kalimat Anda tuntas."
+            )
+            
+    # Jika pertanyaan umum (seperti rekomendasi film sedih)
+    return (
+        "Anda adalah pakar film fiksi ilmiah dan kritikus film dari SciFind.\n"
+        "Tugas Anda adalah menjawab pertanyaan pengguna atau memberikan rekomendasi film dengan mendalam.\n"
+        "Jika memberikan rekomendasi, berikan daftar beberapa film beserta alasan mengapa film tersebut menarik.\n\n"
+        f"Pertanyaan: {question}\n"
+        "Jawablah dengan lengkap, ramah, dan informatif dalam bahasa Indonesia."
+    )
 
 
 # ============================================================
@@ -431,6 +499,71 @@ def api_recommend():
 
     except Exception as e:
         print(f"Error /api/recommend: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/gemini", methods=["POST"])
+def api_gemini():
+    # --- 1. AMBIL DATA DARI REQUEST (WAJIB AGAR TIDAK ERROR "NOT DEFINED") ---
+    data = request.get_json() or {}
+    question = data.get("question", "").strip()
+    title = data.get("title", "").strip()
+
+    # Validasi input
+    if not question:
+        return jsonify({"error": "question is required"}), 400
+
+    # Load module gemini
+    _load_gemini()
+    if _gemini_error:
+        return jsonify({"error": f"Gemini module failed to load: {_gemini_error}"}), 500
+
+    try:
+        t0 = time.time()
+        # Sekarang question dan title sudah ada isinya
+        prompt = _build_gemini_prompt(question, title)
+        
+        # TETAP PAKAI MODEL 2.5-FLASH KAMU
+        model = _gemini_module.GenerativeModel('gemini-2.5-flash')
+        
+        # --- 2. MATIKAN SEMUA SENSOR AGAR JAWABAN TIDAK TERPOTONG ---
+        from google.generativeai.types import HarmCategory, HarmBlockThreshold
+        safety_settings = {
+            HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
+            HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
+            HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
+            HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
+        }
+
+        response = model.generate_content(
+            prompt,
+            generation_config=_gemini_module.types.GenerationConfig(
+                temperature=0.8,
+                max_output_tokens=2048,
+            ),
+            safety_settings=safety_settings
+        )
+        
+        # --- 3. CARA AMBIL TEKS AGAR TIDAK ERROR JIKA KONTEN SENSITIF ---
+        try:
+            answer = response.text
+        except (ValueError, AttributeError):
+            # Jika response.text error karena diblokir Google, ambil dari candidates
+            if response.candidates and response.candidates[0].content.parts:
+                answer = response.candidates[0].content.parts[0].text
+            else:
+                answer = "Maaf, sistem keamanan AI memblokir jawaban untuk pertanyaan ini."
+
+        return jsonify({
+            "question": question,
+            "title": title or None,
+            "model": "gemini-2.5-flash",
+            "answer": answer,
+            "latency_ms": round((time.time() - t0) * 1000, 2),
+        })
+
+    except Exception as e:
+        print(f"Error /api/gemini: {e}")
         return jsonify({"error": str(e)}), 500
 
 
