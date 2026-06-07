@@ -6,6 +6,10 @@ from difflib import get_close_matches
 from collections import Counter
 from semantic_search import semantic_search, get_recommendations
 import os
+from google import genai
+import traceback
+from dotenv import load_dotenv
+load_dotenv()
 
 app = Flask(__name__)
 # Allow CORS for frontend domains (explicit vercel frontend domain)
@@ -468,6 +472,36 @@ def api_recommend():
             'latency_ms': result['latency_ms']
         })
     except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+print(f"GEMINI_API_KEY: {'SET' if GEMINI_API_KEY else 'EMPTY'}")
+client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
+
+@app.route('/api/gemini', methods=['POST'])
+def api_gemini():
+    if not client:
+        return jsonify({'error': 'GEMINI_API_KEY not configured'}), 500
+
+    data = request.get_json()
+    question = data.get('question', '').strip()
+
+    if not question:
+        return jsonify({'error': 'Question is required'}), 400
+
+    try:
+        prompt = f"""Kamu adalah asisten ahli film sci-fi. Jawab pertanyaan berikut dalam Bahasa Indonesia secara informatif dan ringkas.
+
+Pertanyaan: {question}"""
+
+        response = client.models.generate_content(
+            model='gemini-2.5-flash-lite',
+            contents=prompt
+        )
+        return jsonify({'answer': response.text})
+
+    except Exception as e:
+        traceback.print_exc()
         return jsonify({'error': str(e)}), 500
     
 if __name__ == '__main__':
