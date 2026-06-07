@@ -80,30 +80,7 @@ def cosine_similarity(a, b):
 # ============================================================
 
 def autocorrect_query(query):
-    """Auto-correct typos in query using vocabulary"""
-    words = query.lower().split()
-    corrected_words = []
-    corrections_made = []
-    
-    for word in words:
-        # Skip very short words
-        if len(word) <= 2:
-            corrected_words.append(word)
-            continue
-            
-        if word in vocab_set:
-            corrected_words.append(word)
-        else:
-            # Find close matches with lower threshold
-            matches = get_close_matches(word, vocab_set, n=1, cutoff=0.5)
-            if matches:
-                corrected_words.append(matches[0])
-                corrections_made.append({"original": word, "corrected": matches[0]})
-            else:
-                corrected_words.append(word)
-    
-    corrected_query = " ".join(corrected_words)
-    return corrected_query, corrections_made
+    return query, []
 
 # ============================================================
 #  TITLE  DOCUMENT MAP
@@ -501,4 +478,4 @@ if __name__ == '__main__':
     print(f"  Server: http://localhost:5000")
     print(f"  Health: http://localhost:5000/api/health")
     print("="*60 + "\n")
-    app.run(debug=True, port=8000)
+    app.run(debug=True, port=5000)
