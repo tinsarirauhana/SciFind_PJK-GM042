@@ -513,4 +513,5 @@ if __name__ == '__main__':
     print(f"  Server: http://localhost:5000")
     print(f"  Health: http://localhost:5000/api/health")
     print("="*60 + "\n")
-    app.run(debug=True, port=5000)
+    port = int(os.environ.get("PORT", 8000))
+    app.run(debug=False, host="0.0.0.0", port=port)
