@@ -18,7 +18,7 @@ CORS(app, resources={
         "origins": [
             "http://localhost:5173",
             "http://localhost:5000",
-            "https://uas-pi-sci-find.vercel.app"
+            "https://scifind-capstone-pjkgm042.vercel.app"
         ]
     }
 })
